@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import scipy.misc
-
+import cv2
 from .misc import *
 
 def im_to_numpy(img):
@@ -82,6 +82,8 @@ def draw_labelmap(img, pt, sigma, type='Gaussian'):
     img_y = max(0, ul[1]), min(br[1], img.shape[0])
 
     img[img_y[0]:img_y[1], img_x[0]:img_x[1]] = g[g_y[0]:g_y[1], g_x[0]:g_x[1]]
+
+
     return to_torch(img)
 
 # =============================================================================

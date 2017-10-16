@@ -110,7 +110,7 @@ def draw_cls_labelmap(img, pt, sigma, label_ind = 1):
 
     return to_torch(img)
 
-def draw_offmap(img, weights, pt, scale = 4):
+def draw_offmap(img, weights, pt, sigma, scale = 4):
     # Draw offset map
     img = to_numpy(img)
     weights = to_numpy(weights)
@@ -118,17 +118,30 @@ def draw_offmap(img, weights, pt, scale = 4):
     x_ex = int(pt[0] / scale)
     y_ex = int(pt[1] / scale)
 
-    if(x_ex < 0 or x_ex >= img.shape[2] or y_ex < 0 or y_ex >= img.shape[1]):
+    ul = [int(x_ex - 3 * sigma), int(y_ex - 3 * sigma)]
+    br = [int(x_ex + 3 * sigma + 1), int(y_ex + 3 * sigma + 1)]
+
+    if (ul[0] >= img.shape[2] or ul[1] >= img.shape[1] or
+            br[0] < 0 or br[1] < 0):
+        # If not, just return the image as is
         return to_torch(img), to_torch(weights)
 
-    off_x = (float(pt[0]) - x_ex * scale - scale/2 + 0.5) / scale
-    off_y = (float(pt[1]) - y_ex * scale - scale/2 + 0.5) / scale
+    # Image range
+    img_x = max(0, ul[0]), min(br[0], img.shape[2])
+    img_y = max(0, ul[1]), min(br[1], img.shape[1])
 
-    img[0, y_ex, x_ex] = off_x
-    img[1, y_ex, x_ex] = off_y
+    bin_r = (br[0] - ul[0] + 1) * 0.5
 
-    weights[0, y_ex, x_ex] = 1.0
-    weights[1, y_ex, x_ex] = 1.0
+    for x_i in xrange(img_x[0], img_x[1]):
+        for y_j in xrange(img_y[0], img_y[1]):
+            if(np.sqrt(((x_i - x_ex)**2 + (y_j - y_ex) **2)) <= 3 * sigma):
+                off_x = (float(pt[0]) - x_i * scale - scale/2) / (bin_r * scale)
+                off_y = (float(pt[1]) - y_j * scale - scale/2) / (bin_r * scale)
+                img[0, y_j, x_i] = off_x
+                img[1, y_j, x_i] = off_y
+
+                weights[0, y_j, x_i] = 1.0/(bin_r * 2)**2
+                weights[1, y_j, x_i] = 1.0/(bin_r * 2)**2
 
     return to_torch(img), to_torch(weights)
 

@@ -128,12 +128,17 @@ class Mpii(data.Dataset):
 
                 tpts_off[i, 0:2] = to_torch(transform(tpts_off[i, 0:2]+1, c, s, [self.inp_res, self.inp_res], rot = r))
                 off_target, off_target_weights = \
-                    draw_offmap(off_target, off_target_weights, tpts_off[i]-1, scale=self.inp_res/self.out_res)
+                    draw_offmap(off_target, off_target_weights, tpts_off[i]-1, self.sigma, scale=self.inp_res/self.out_res)
 
         # Meta info
         if(False):
             target_vis = to_numpy(target)
             cv2.imshow("labels", target_vis)
+
+            off_target_vis = to_numpy(off_target_weights)
+            off_target_vis = np.max(off_target_vis, axis=0)
+            off_target_vis = abs(off_target_vis)
+            cv2.imshow("off", off_target_vis)
             cv2.waitKey(0)
 
         meta = {'index' : index, 'center' : c, 'scale' : s, 

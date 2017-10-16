@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python example/mpii.py -a hg --stacks 2 --blocks 1 --checkpoint checkpoint/mpii/hg2_cls -j 4

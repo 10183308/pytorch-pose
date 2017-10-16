@@ -50,7 +50,7 @@ def main(args):
     # define loss function (criterion) and optimizer
     criterion = CrossEntropyLoss2d(size_average=True).cuda()
 
-    criterion_off = torch.nn.MSELoss(size_average=False).cuda()
+    criterion_off = torch.nn.SmoothL1Loss(size_average=False).cuda()
 
     optimizer = torch.optim.RMSprop(model.parameters(), 
                                 lr=args.lr,
@@ -115,23 +115,23 @@ def main(args):
         valid_loss, valid_acc, predictions = validate(val_loader, model, criterion, criterion_off, args.num_classes,
                                                       args.debug, args.flip)
         #
-        # # append logger file
-        # logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc])
-        #
-        # # remember best acc and save checkpoint
-        # is_best = valid_acc > best_acc
-        # best_acc = max(valid_acc, best_acc)
-        # save_checkpoint({
-        #     'epoch': epoch + 1,
-        #     'arch': args.arch,
-        #     'state_dict': model.state_dict(),
-        #     'best_acc': best_acc,
-        #     'optimizer' : optimizer.state_dict(),
-        # }, predictions, is_best, checkpoint=args.checkpoint)
+        # append logger file
+        logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc])
 
-    # logger.close()
-    # logger.plot(['Train Acc', 'Val Acc'])
-    # savefig(os.path.join(args.checkpoint, 'log.eps'))
+        # remember best acc and save checkpoint
+        is_best = valid_acc > best_acc
+        best_acc = max(valid_acc, best_acc)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_acc': best_acc,
+            'optimizer' : optimizer.state_dict(),
+        }, predictions, is_best, checkpoint=args.checkpoint)
+
+    logger.close()
+    logger.plot(['Train Acc', 'Val Acc'])
+    savefig(os.path.join(args.checkpoint, 'log.eps'))
 
 
 def train(train_loader, model, criterion, criterion_off, optimizer, debug=False, flip=True):
@@ -181,7 +181,7 @@ def train(train_loader, model, criterion, criterion_off, optimizer, debug=False,
 
 
         loss_key = loss_key
-        loss_off = loss_off / 32.0
+        loss_off = loss_off / 160.0
 
 
         loss = loss_key + loss_off
@@ -264,8 +264,10 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
         off_weights_var = torch.autograd.Variable(off_weights.cuda())
         # compute output
         output = model(input_var)
-        score_map = output[-2].data.cpu()
-        off_map = output[-1].data.cpu()
+        score_map = output[0].data.cpu()
+        score_map_out = F.softmax(score_map).data.cpu()
+
+        off_map = output[1].data.cpu()
 
         if flip:
             flip_input_var = torch.autograd.Variable(
@@ -292,7 +294,7 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
             loss_off = criterion_off(off_pred, off_var)
 
         loss_key = loss_key
-        loss_off = loss_off / 32.0
+        loss_off = loss_off / 160.0
         loss = loss_key + loss_off
 
         # N, H, W = target.size()
@@ -300,15 +302,15 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
         # acc = accuracy(score_map, target.cpu(), idx)
 
         # generate predictions
-        score_map = score_map[:, 1:, :, :]
-        preds = final_preds(score_map, off_map, meta['center'], meta['scale'], [64, 64])
-        for n in range(score_map.size(0)):
+        score_map_out = score_map_out[:, 1:, :, :]
+        preds = final_preds(score_map_out, off_map, meta['center'], meta['scale'], [64, 64])
+        for n in range(score_map_out.size(0)):
             predictions[meta['index'][n], :, :] = preds[n, :, :]
 
 
         if debug:
             # gt_batch_img = batch_with_heatmap(inputs, target)
-            pred_batch_img = batch_with_heatmap(inputs, score_map)
+            pred_batch_img = batch_with_heatmap(inputs, score_map_out)
             if not gt_win or not pred_win:
                 # plt.subplot(121)
                 # gt_win = plt.imshow(gt_batch_img)
@@ -371,7 +373,7 @@ if __name__ == '__main__':
                         help='train batchsize')
     parser.add_argument('--test-batch', default=6, type=int, metavar='N',
                         help='test batchsize')
-    parser.add_argument('--lr', '--learning-rate', default=2.5e-4, type=float,
+    parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                         metavar='LR', help='initial learning rate')
     parser.add_argument('--momentum', default=0, type=float, metavar='M',
                         help='momentum')
@@ -384,7 +386,7 @@ if __name__ == '__main__':
     # Data processing
     parser.add_argument('-f', '--flip', dest='flip', action='store_true',
                         help='flip the input during validation')
-    parser.add_argument('--sigma', type=float, default=0.67,
+    parser.add_argument('--sigma', type=float, default=0.5,
                         help='Groundtruth Gaussian sigma.')
     parser.add_argument('--sigma-decay', type=float, default=0,
                         help='Sigma decay rate for each epoch.')

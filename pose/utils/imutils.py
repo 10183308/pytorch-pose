@@ -73,7 +73,6 @@ def draw_labelmap(img, pt, sigma, type='Gaussian'):
     elif type == 'Cauchy':
         g = sigma / (((x - x0) ** 2 + (y - y0) ** 2 + sigma ** 2) ** 1.5)
 
-
     # Usable gaussian range
     g_x = max(0, -ul[0]), min(br[0], img.shape[1]) - ul[0]
     g_y = max(0, -ul[1]), min(br[1], img.shape[0]) - ul[1]
@@ -81,10 +80,57 @@ def draw_labelmap(img, pt, sigma, type='Gaussian'):
     img_x = max(0, ul[0]), min(br[0], img.shape[1])
     img_y = max(0, ul[1]), min(br[1], img.shape[0])
 
+
     img[img_y[0]:img_y[1], img_x[0]:img_x[1]] = g[g_y[0]:g_y[1], g_x[0]:g_x[1]]
 
+    return to_torch(img)
+
+def draw_cls_labelmap(img, pt, sigma, label_ind = 1):
+    # Draw a 2D gaussian
+    # Adopted from https://github.com/anewell/pose-hg-train/blob/master/src/pypose/draw.py
+    img = to_numpy(img)
+
+    # Check that any part of the gaussian is in-bounds
+    ul = [int(pt[0] - 3 * sigma), int(pt[1] - 3 * sigma)]
+    br = [int(pt[0] + 3 * sigma + 1), int(pt[1] + 3 * sigma + 1)]
+    if (ul[0] >= img.shape[1] or ul[1] >= img.shape[0] or
+            br[0] < 0 or br[1] < 0):
+        # If not, just return the image as is
+        return to_torch(img)
+
+    # Image range
+    img_x = max(0, ul[0]), min(br[0], img.shape[1])
+    img_y = max(0, ul[1]), min(br[1], img.shape[0])
+
+    # a circle
+    for x_i in xrange(img_x[0], img_x[1]):
+        for y_j in xrange(img_y[0], img_y[1]):
+            if(np.sqrt(((x_i - pt[0])**2 + (y_j - pt[1]) **2)) <= 3 * sigma):
+                img[y_j, x_i] = label_ind
 
     return to_torch(img)
+
+def draw_offmap(img, weights, pt, scale = 4):
+    # Draw offset map
+    img = to_numpy(img)
+    weights = to_numpy(weights)
+
+    x_ex = int(pt[0] / scale)
+    y_ex = int(pt[1] / scale)
+
+    if(x_ex < 0 or x_ex >= img.shape[2] or y_ex < 0 or y_ex >= img.shape[1]):
+        return to_torch(img), to_torch(weights)
+
+    off_x = (float(pt[0]) - x_ex * scale - scale/2 + 0.5) / scale
+    off_y = (float(pt[1]) - y_ex * scale - scale/2 + 0.5) / scale
+
+    img[0, y_ex, x_ex] = off_x
+    img[1, y_ex, x_ex] = off_y
+
+    weights[0, y_ex, x_ex] = 1.0
+    weights[1, y_ex, x_ex] = 1.0
+
+    return to_torch(img), to_torch(weights)
 
 # =============================================================================
 # Helpful display functions

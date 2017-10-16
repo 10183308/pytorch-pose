@@ -4,7 +4,7 @@ import os
 import argparse
 import time
 import matplotlib.pyplot as plt
-
+import numpy as np
 import torch
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
@@ -20,6 +20,10 @@ from pose.utils.imutils import batch_with_heatmap
 from pose.utils.transforms import fliplr, flip_back
 import pose.models as models
 import pose.datasets as datasets
+
+from pose.utils.misc import to_numpy
+from pose.loss.loss import CrossEntropyLoss2d
+import torch.nn.functional as F
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -39,12 +43,14 @@ def main(args):
 
     # create model
     print("==> creating model '{}', stacks={}, blocks={}".format(args.arch, args.stacks, args.blocks))
-    model = models.__dict__[args.arch](num_stacks=args.stacks, num_blocks=args.blocks, num_classes=args.num_classes)
+    model = models.__dict__[args.arch](num_stacks=args.stacks, num_blocks=args.blocks, num_classes=args.num_classes+1)
 
     model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    criterion = torch.nn.MSELoss(size_average=True).cuda()
+    criterion = CrossEntropyLoss2d(size_average=True).cuda()
+
+    criterion_off = torch.nn.MSELoss(size_average=False).cuda()
 
     optimizer = torch.optim.RMSprop(model.parameters(), 
                                 lr=args.lr,
@@ -88,7 +94,7 @@ def main(args):
 
     if args.evaluate:
         print('\nEvaluation only') 
-        loss, acc, predictions = validate(val_loader, model, criterion, args.num_classes, args.debug, args.flip)
+        loss, acc, predictions = validate(val_loader, model, criterion, criterion_off, args.num_classes, args.debug, args.flip)
         save_pred(predictions, checkpoint=args.checkpoint)
         return
 
@@ -103,35 +109,38 @@ def main(args):
             val_loader.dataset.sigma *=  args.sigma_decay
 
         # train for one epoch
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer, args.debug, args.flip)
+        train_loss, train_acc = train(train_loader, model, criterion, criterion_off, optimizer, args.debug, args.flip)
 
         # evaluate on validation set
-        valid_loss, valid_acc, predictions = validate(val_loader, model, criterion, args.num_classes,
+        valid_loss, valid_acc, predictions = validate(val_loader, model, criterion, criterion_off, args.num_classes,
                                                       args.debug, args.flip)
+        #
+        # # append logger file
+        # logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc])
+        #
+        # # remember best acc and save checkpoint
+        # is_best = valid_acc > best_acc
+        # best_acc = max(valid_acc, best_acc)
+        # save_checkpoint({
+        #     'epoch': epoch + 1,
+        #     'arch': args.arch,
+        #     'state_dict': model.state_dict(),
+        #     'best_acc': best_acc,
+        #     'optimizer' : optimizer.state_dict(),
+        # }, predictions, is_best, checkpoint=args.checkpoint)
 
-        # append logger file
-        logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc])
-
-        # remember best acc and save checkpoint
-        is_best = valid_acc > best_acc
-        best_acc = max(valid_acc, best_acc)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_acc': best_acc,
-            'optimizer' : optimizer.state_dict(),
-        }, predictions, is_best, checkpoint=args.checkpoint)
-
-    logger.close()
-    logger.plot(['Train Acc', 'Val Acc'])
-    savefig(os.path.join(args.checkpoint, 'log.eps'))
+    # logger.close()
+    # logger.plot(['Train Acc', 'Val Acc'])
+    # savefig(os.path.join(args.checkpoint, 'log.eps'))
 
 
-def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
+def train(train_loader, model, criterion, criterion_off, optimizer, debug=False, flip=True):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
+
+    losses_key = AverageMeter()
+
     acces = AverageMeter()
 
     # switch to train mode
@@ -141,41 +150,67 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
 
     gt_win, pred_win = None, None
     bar = Bar('Processing', max=len(train_loader))
-    for i, (inputs, target, meta) in enumerate(train_loader):
+    for i, (inputs, target, off, off_weights, meta) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         input_var = torch.autograd.Variable(inputs.cuda())
+
+        target = target.type(torch.LongTensor)
         target_var = torch.autograd.Variable(target.cuda(async=True))
+
+        off_var = torch.autograd.Variable(off.cuda(async=True))
+        off_weights_var = torch.autograd.Variable(off_weights.cuda())
 
         # compute output
         output = model(input_var)
-        score_map = output[-1].data.cpu()
+        score_map = output[0].data.cpu()
 
-        loss = criterion(output[0], target_var)
-        for j in range(1, len(output)):
-            loss += criterion(output[j], target_var)
-        acc = accuracy(score_map, target, idx)
+        score_map_out = F.softmax(score_map).data.cpu()
 
-        if debug: # visualize groundtruth and predictions
-            gt_batch_img = batch_with_heatmap(inputs, target)
-            pred_batch_img = batch_with_heatmap(inputs, score_map)
+        loss_key = criterion(output[0], target_var)
+
+        off_pred = torch.mul(output[1], off_weights_var)
+        loss_off = criterion_off(off_pred, off_var)
+
+        for j in range(1, len(output)/2):
+            loss_key += criterion(output[j*2], target_var)
+
+            off_pred = torch.mul(output[j*2+1], off_weights_var)
+            loss_off = criterion_off(off_pred, off_var)
+
+
+        loss_key = loss_key
+        loss_off = loss_off / 32.0
+
+
+        loss = loss_key + loss_off
+
+
+        # acc = accuracy(score_map, target, idx)
+        acc = torch.zeros(len(idx)+1)
+
+        if debug and i% 100 == 0: # visualize groundtruth and predictions
+            # gt_batch_img = batch_with_heatmap(inputs, target)
+            pred_batch_img = batch_with_heatmap(inputs, score_map_out)
             if not gt_win or not pred_win:
-                ax1 = plt.subplot(121)
-                ax1.title.set_text('Groundtruth')
-                gt_win = plt.imshow(gt_batch_img)
-                ax2 = plt.subplot(122)
-                ax2.title.set_text('Prediction')
+                # ax1 = plt.subplot(121)
+                # ax1.title.set_text('Groundtruth')
+                # gt_win = plt.imshow(gt_batch_img)
+                # ax2 = plt.subplot(122)
+                # ax2.title.set_text('Prediction')
                 pred_win = plt.imshow(pred_batch_img)
             else:
-                gt_win.set_data(gt_batch_img)
+                # gt_win.set_data(gt_batch_img)
                 pred_win.set_data(pred_batch_img)
-            plt.pause(.05)
+            plt.pause(.01)
             plt.draw()
 
         # measure accuracy and record loss
         losses.update(loss.data[0], inputs.size(0))
+        losses_key.update(loss_key.data[0], inputs.size(0))
         acces.update(acc[0], inputs.size(0))
+
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -187,14 +222,14 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
         end = time.time()
 
         # plot progress
-        bar.suffix  = '({batch}/{size}) Data: {data:.6f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | Acc: {acc: .4f}'.format(
+        bar.suffix  = '({batch}/{size})  Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | Loss_key: {loss_key:.4f} | Loss_off: {loss_off:.4f} | Acc: {acc: .4f}'.format(
                     batch=i + 1,
                     size=len(train_loader),
-                    data=data_time.val,
-                    bt=batch_time.val,
                     total=bar.elapsed_td,
                     eta=bar.eta_td,
                     loss=losses.avg,
+                    loss_key=losses_key.avg,
+                    loss_off = losses.avg - losses_key.avg,
                     acc=acces.avg
                     )
         bar.next()
@@ -202,8 +237,7 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
     bar.finish()
     return losses.avg, acces.avg
 
-
-def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
+def validate(val_loader, model, criterion, criterion_off, num_classes, debug=False, flip=True):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -218,57 +252,77 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
     gt_win, pred_win = None, None
     end = time.time()
     bar = Bar('Processing', max=len(val_loader))
-    for i, (inputs, target, meta) in enumerate(val_loader):
+    for i, (inputs, target, off, off_weights, meta) in enumerate(val_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
+        target = target.type(torch.LongTensor)
         target = target.cuda(async=True)
-
         input_var = torch.autograd.Variable(inputs.cuda(), volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
-
+        off_var = torch.autograd.Variable(off.cuda(async=True))
+        off_weights_var = torch.autograd.Variable(off_weights.cuda())
         # compute output
         output = model(input_var)
-        score_map = output[-1].data.cpu()
+        score_map = output[-2].data.cpu()
+        off_map = output[-1].data.cpu()
+
         if flip:
             flip_input_var = torch.autograd.Variable(
                     torch.from_numpy(fliplr(inputs.clone().numpy())).float().cuda(), 
                     volatile=True
                 )
             flip_output_var = model(flip_input_var)
-            flip_output = flip_back(flip_output_var[-1].data.cpu())
+            flip_output = flip_back(flip_output_var[-2].data.cpu())
+            flip_output_off = flip_back(flip_output_var[-1].data.cpu())
             score_map += flip_output
+            off_map = (flip_output_off + off_map) * 0.5
 
 
 
-        loss = 0
-        for o in output:
-            loss += criterion(o, target_var)
-        acc = accuracy(score_map, target.cpu(), idx)
+        loss_key = criterion(output[0], target_var)
+
+        off_pred = torch.mul(output[1], off_weights_var)
+        loss_off = criterion_off(off_pred, off_var)
+
+        for j in range(1, len(output)/2):
+            loss_key += criterion(output[j*2], target_var)
+
+            off_pred = torch.mul(output[j*2+1], off_weights_var)
+            loss_off = criterion_off(off_pred, off_var)
+
+        loss_key = loss_key
+        loss_off = loss_off / 32.0
+        loss = loss_key + loss_off
+
+        # N, H, W = target.size()
+        # target = target.view(N, 1, H, W)
+        # acc = accuracy(score_map, target.cpu(), idx)
 
         # generate predictions
-        preds = final_preds(score_map, meta['center'], meta['scale'], [64, 64])
+        score_map = score_map[:, 1:, :, :]
+        preds = final_preds(score_map, off_map, meta['center'], meta['scale'], [64, 64])
         for n in range(score_map.size(0)):
             predictions[meta['index'][n], :, :] = preds[n, :, :]
 
 
         if debug:
-            gt_batch_img = batch_with_heatmap(inputs, target)
+            # gt_batch_img = batch_with_heatmap(inputs, target)
             pred_batch_img = batch_with_heatmap(inputs, score_map)
             if not gt_win or not pred_win:
-                plt.subplot(121)
-                gt_win = plt.imshow(gt_batch_img)
-                plt.subplot(122)
+                # plt.subplot(121)
+                # gt_win = plt.imshow(gt_batch_img)
+                # plt.subplot(122)
                 pred_win = plt.imshow(pred_batch_img)
             else:
-                gt_win.set_data(gt_batch_img)
+                # gt_win.set_data(gt_batch_img)
                 pred_win.set_data(pred_batch_img)
             plt.pause(.05)
             plt.draw()
 
         # measure accuracy and record loss
         losses.update(loss.data[0], inputs.size(0))
-        acces.update(acc[0], inputs.size(0))
+        # acces.update(acc[0], inputs.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -330,7 +384,7 @@ if __name__ == '__main__':
     # Data processing
     parser.add_argument('-f', '--flip', dest='flip', action='store_true',
                         help='flip the input during validation')
-    parser.add_argument('--sigma', type=float, default=1,
+    parser.add_argument('--sigma', type=float, default=0.67,
                         help='Groundtruth Gaussian sigma.')
     parser.add_argument('--sigma-decay', type=float, default=0,
                         help='Sigma decay rate for each epoch.')

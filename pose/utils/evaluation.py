@@ -4,7 +4,7 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 from random import randint
-
+import  torch
 from .misc import *
 from .transforms import transform, transform_preds
 
@@ -15,7 +15,7 @@ def get_preds(scores):
         return type: torch.LongTensor
     '''
     assert scores.dim() == 4, 'Score maps should be 4-dim'
-    maxval, idx = torch.max(scores.view(scores.size(0), scores.size(1), -1), 2)
+    maxval, idx = torch.max(scores.contiguous().view(scores.size(0), scores.size(1), -1), 2)
 
     maxval = maxval.view(scores.size(0), scores.size(1), 1)
     idx = idx.view(scores.size(0), scores.size(1), 1) + 1
@@ -71,7 +71,7 @@ def accuracy(output, target, idxs, thr=0.5):
         acc[0] = avg_acc / cnt
     return acc
 
-def final_preds(output, center, scale, res):
+def final_preds(output, off_map, center, scale, res):
     coords = get_preds(output) # float type
 
     # pose-processing

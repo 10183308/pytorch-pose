@@ -145,7 +145,7 @@ def crop(img, center, scale, res, rot=0):
     new_img = np.zeros(new_shape)
 
     # Range to fill new array
-    new_x = max(0, -ul[0]), min(br[0], len(img[0])) - ul[0]
+    new_x = max(0, -ul[0]), min(br[0], len(img[0])) - ul[0]       
     new_y = max(0, -ul[1]), min(br[1], len(img)) - ul[1]
     # Range to sample from original image
     old_x = max(0, ul[0]), min(len(img[0]), br[0])

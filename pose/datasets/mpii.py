@@ -91,7 +91,9 @@ class Mpii(data.Dataset):
 
         r = 0
         if self.is_train:
+            # scale[0.75, 1.25]
             s = s*torch.randn(1).mul_(sf).add_(1).clamp(1-sf, 1+sf)[0]
+
             r = torch.randn(1).mul_(rf).clamp(-2*rf, 2*rf)[0] if random.random() <= 0.6 else 0
 
             # Flip
@@ -111,18 +113,33 @@ class Mpii(data.Dataset):
 
         # Generate ground truth
         tpts = pts.clone()
-        target = torch.zeros(nparts, self.out_res, self.out_res)
+        target = torch.zeros(self.out_res, self.out_res)
+
+        tpts_off = pts.clone()
+        off_target = torch.zeros(2, self.out_res, self.out_res)
+        off_target_weights = torch.zeros(2, self.out_res, self.out_res)
+
         for i in range(nparts):
             # if tpts[i, 2] > 0: # This is evil!!
             if tpts[i, 0] > 0:
+
                 tpts[i, 0:2] = to_torch(transform(tpts[i, 0:2]+1, c, s, [self.out_res, self.out_res], rot=r))
-                target[i] = draw_labelmap(target[i], tpts[i]-1, self.sigma, type=self.label_type)
+                target = draw_cls_labelmap(target, tpts[i]-1, self.sigma, label_ind= (i+1))
+
+                tpts_off[i, 0:2] = to_torch(transform(tpts_off[i, 0:2]+1, c, s, [self.inp_res, self.inp_res], rot = r))
+                off_target, off_target_weights = \
+                    draw_offmap(off_target, off_target_weights, tpts_off[i]-1, scale=self.inp_res/self.out_res)
 
         # Meta info
+        if(False):
+            target_vis = to_numpy(target)
+            cv2.imshow("labels", target_vis)
+            cv2.waitKey(0)
+
         meta = {'index' : index, 'center' : c, 'scale' : s, 
         'pts' : pts, 'tpts' : tpts}
 
-        return inp, target, meta
+        return inp, target, off_target, off_target_weights, meta
 
     def __len__(self):
         if self.is_train:

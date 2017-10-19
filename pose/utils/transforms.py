@@ -117,16 +117,13 @@ def transform(pt, center, scale, res, invert=0, rot=0):
 
 def transform_reg(pt, off_x, off_y, center, scale, res, invert=0, rot=0):
     # Transform pixel location to different reference
+    pt[0] = pt[0] + 0.5 + off_x
+    pt[1] = pt[1] + 0.5 + off_y
     t = get_transform(center, scale, res, rot=rot)
     if invert:
         t = np.linalg.inv(t)
     new_pt = np.array([pt[0] - 1, pt[1] - 1, 1.]).T
     new_pt = np.dot(t, new_pt)
-
-    # print(off_x * 6 + 2, off_y * 6 + 2)
-
-    new_pt[0] = new_pt[0] + off_x * 6 + 2
-    new_pt[1] = new_pt[1] + off_y * 6 + 2
 
     return new_pt[:2].astype(int) + 1
 
@@ -134,20 +131,36 @@ def transform_preds(coords, center, scale, res):
     # size = coords.size()
     # coords = coords.view(-1, coords.size(-1))
     # print(coords.size())
+    coords_out = coords.clone()
     for p in range(coords.size(0)):
-        coords[p, 0:2] = to_torch(transform(coords[p, 0:2], center, scale, res, 1, 0))
-    return coords
+        coords_out[p, 0:2] = to_torch(transform(coords[p, 0:2], center, scale, res, 1, 0))
+    return coords_out
 
 def transform_preds_withreg(coords, off_map, center, scale, res):
     # size = coords.size()
     # coords = coords.view(-1, coords.size(-1))
     # print(coords.size())
     off_map = off_map.view(2, res[0], res[1])
+    coords_out = coords.clone()
     for p in range(coords.size(0)):
-        off_x = off_map[0, int(coords[p, 0]-1), int(coords[p, 1] -1)]
-        off_y = off_map[1, int(coords[p, 0]-1), int(coords[p, 1]-1)]
-        coords[p, 0:2] = to_torch(transform_reg(coords[p, 0:2], off_x, off_y, center, scale, res, 1, 0))
-    return coords
+
+        coords_ts = torch.zeros(9, 2)
+        i = 0
+        for x_i in range(int(coords[p, 0]) - 2, int(coords[p, 0]) + 1):
+            x_i = max(min(x_i, res[0]-1), 0)
+            for y_i in range(int(coords[p, 1]) - 2, int(coords[p, 1]) + 1):
+                y_i = max(min(y_i, res[1]-1), 0)
+
+                off_x = off_map[0, y_i, x_i]
+                off_y = off_map[1, y_i, x_i]
+
+                coords_t = [x_i+1, y_i+1]
+                coords_t = to_torch(transform_reg(coords_t, off_x, off_y, center, scale, res, 1, 0))
+                coords_ts[i, :] = coords_t
+                i = i + 1
+        coords_out[p, 0:2] = torch.mean(coords_ts, 0)
+
+    return coords_out
 
 
 def crop(img, center, scale, res, rot=0):

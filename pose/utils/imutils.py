@@ -81,6 +81,7 @@ def draw_labelmap(img, pt, sigma, type='Gaussian'):
     img_y = max(0, ul[1]), min(br[1], img.shape[0])
 
 
+
     img[img_y[0]:img_y[1], img_x[0]:img_x[1]] = g[g_y[0]:g_y[1], g_x[0]:g_x[1]]
 
     return to_torch(img)
@@ -91,8 +92,8 @@ def draw_cls_labelmap(img, pt, sigma, label_ind = 1):
     img = to_numpy(img)
 
     # Check that any part of the gaussian is in-bounds
-    ul = [int(pt[0] - 3 * sigma), int(pt[1] - 3 * sigma)]
-    br = [int(pt[0] + 3 * sigma + 1), int(pt[1] + 3 * sigma + 1)]
+    ul = [int(pt[0] - sigma), int(pt[1] - sigma)]
+    br = [int(pt[0] + sigma + 1), int(pt[1] + sigma + 1)]
     if (ul[0] >= img.shape[1] or ul[1] >= img.shape[0] or
             br[0] < 0 or br[1] < 0):
         # If not, just return the image as is
@@ -103,9 +104,11 @@ def draw_cls_labelmap(img, pt, sigma, label_ind = 1):
     img_y = max(0, ul[1]), min(br[1], img.shape[0])
 
     # a circle
-    for x_i in xrange(img_x[0], img_x[1]):
-        for y_j in xrange(img_y[0], img_y[1]):
-            if(np.sqrt(((x_i - pt[0])**2 + (y_j - pt[1]) **2)) <= 3 * sigma):
+    for x_i in xrange(img_x[0], img_x[1]+1):
+        x_i = max(0, min(x_i, img.shape[0]-1))
+        for y_j in xrange(img_y[0], img_y[1]+1):
+            y_j = max(0, min(y_j, img.shape[1]-1))
+            if(np.sqrt(((x_i - pt[0])**2 + (y_j - pt[1]) **2)) <= sigma):
                 img[y_j, x_i] = label_ind
 
     return to_torch(img)
@@ -118,8 +121,9 @@ def draw_offmap(img, weights, pt, sigma, scale = 4):
     x_ex = int(pt[0] / scale)
     y_ex = int(pt[1] / scale)
 
-    ul = [int(x_ex - 3 * sigma), int(y_ex - 3 * sigma)]
-    br = [int(x_ex + 3 * sigma + 1), int(y_ex + 3 * sigma + 1)]
+    ul = [int(x_ex - sigma), int(y_ex - sigma)]
+    br = [int(x_ex + sigma + 1), int(y_ex + sigma + 1)]
+
 
     if (ul[0] >= img.shape[2] or ul[1] >= img.shape[1] or
             br[0] < 0 or br[1] < 0):
@@ -132,16 +136,22 @@ def draw_offmap(img, weights, pt, sigma, scale = 4):
 
     bin_r = (br[0] - ul[0] + 1) * 0.5
 
-    for x_i in xrange(img_x[0], img_x[1]):
-        for y_j in xrange(img_y[0], img_y[1]):
-            if(np.sqrt(((x_i - x_ex)**2 + (y_j - y_ex) **2)) <= 3 * sigma):
-                off_x = (float(pt[0]) - x_i * scale - scale/2) / (bin_r * scale)
-                off_y = (float(pt[1]) - y_j * scale - scale/2) / (bin_r * scale)
+    for x_i in xrange(img_x[0], img_x[1]+1):
+        x_i = max(0, min(x_i, img.shape[1]-1))
+        for y_j in xrange(img_y[0], img_y[1]+1):
+            y_j = max(0, min(y_j, img.shape[2]-1))
+            if(np.sqrt(((x_i - x_ex)**2 + (y_j - y_ex) **2)) <= sigma):
+
+                off_x = (float(pt[0])/scale - x_i - 0.5) / 0.5
+                off_y = (float(pt[1])/scale - y_j - 0.5) / 0.5
                 img[0, y_j, x_i] = off_x
                 img[1, y_j, x_i] = off_y
 
                 weights[0, y_j, x_i] = 1.0/(bin_r * 2)**2
                 weights[1, y_j, x_i] = 1.0/(bin_r * 2)**2
+
+    weights[0, max(0, min(img_y[0]+1, img.shape[2]-1)), max(0, min(img_x[0]+1, img.shape[1]-1))] = 2.0/(bin_r * 2)**2
+    weights[1, max(0, min(img_y[0]+1, img.shape[2]-1)), max(0, min(img_x[0]+1, img.shape[1]-1))] = 2.0/(bin_r * 2)**2
 
     return to_torch(img), to_torch(weights)
 

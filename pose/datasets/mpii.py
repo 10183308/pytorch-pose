@@ -15,7 +15,7 @@ from pose.utils.transforms import *
 
 
 class Mpii(data.Dataset):
-    def __init__(self, jsonfile, img_folder, inp_res=256, out_res=64, train=True, sigma=1,
+    def __init__(self, jsonfile, img_folder, inp_res=384, out_res=48, train=True, sigma=1,
                  scale_factor=0.25, rot_factor=30, label_type='Gaussian'):
         self.img_folder = img_folder    # root image folders
         self.is_train = train           # training set or test set
@@ -138,6 +138,7 @@ class Mpii(data.Dataset):
             off_target_vis = to_numpy(off_target_weights)
             off_target_vis = np.max(off_target_vis, axis=0)
             off_target_vis = abs(off_target_vis)
+            off_target_vis[off_target_vis > 0] = 1
             cv2.imshow("off", off_target_vis)
             cv2.waitKey(0)
 

@@ -181,7 +181,7 @@ def train(train_loader, model, criterion, criterion_off, optimizer, debug=False,
 
 
         loss_key = loss_key
-        loss_off = loss_off / 160.0
+        loss_off = loss_off / (32.0 * 20)
 
 
         loss = loss_key + loss_off
@@ -190,7 +190,7 @@ def train(train_loader, model, criterion, criterion_off, optimizer, debug=False,
         # acc = accuracy(score_map, target, idx)
         acc = torch.zeros(len(idx)+1)
 
-        if debug and i% 100 == 0: # visualize groundtruth and predictions
+        if debug and i% 10 == 0: # visualize groundtruth and predictions
             # gt_batch_img = batch_with_heatmap(inputs, target)
             pred_batch_img = batch_with_heatmap(inputs, score_map_out)
             if not gt_win or not pred_win:
@@ -264,10 +264,10 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
         off_weights_var = torch.autograd.Variable(off_weights.cuda())
         # compute output
         output = model(input_var)
-        score_map = output[0].data.cpu()
+        score_map = output[-2].data.cpu()
         score_map_out = F.softmax(score_map).data.cpu()
 
-        off_map = output[1].data.cpu()
+        off_map = output[-1].data.cpu()
 
         if flip:
             flip_input_var = torch.autograd.Variable(
@@ -294,7 +294,7 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
             loss_off = criterion_off(off_pred, off_var)
 
         loss_key = loss_key
-        loss_off = loss_off / 160.0
+        loss_off = loss_off / (32.0 * 20)
         loss = loss_key + loss_off
 
         # N, H, W = target.size()
@@ -303,7 +303,7 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
 
         # generate predictions
         score_map_out = score_map_out[:, 1:, :, :]
-        preds = final_preds(score_map_out, off_map, meta['center'], meta['scale'], [64, 64])
+        preds = final_preds(score_map_out, off_map, meta['center'], meta['scale'], [48, 48])
         for n in range(score_map_out.size(0)):
             predictions[meta['index'][n], :, :] = preds[n, :, :]
 
@@ -319,7 +319,7 @@ def validate(val_loader, model, criterion, criterion_off, num_classes, debug=Fal
             else:
                 # gt_win.set_data(gt_batch_img)
                 pred_win.set_data(pred_batch_img)
-            plt.pause(.05)
+            plt.pause(0.05)
             plt.draw()
 
         # measure accuracy and record loss

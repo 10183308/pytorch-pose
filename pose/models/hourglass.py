@@ -104,6 +104,7 @@ class HourglassNet(nn.Module):
         self.num_stacks = num_stacks
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=True)
+
         self.bn1 = nn.BatchNorm2d(self.inplanes) 
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = self._make_residual(block, self.inplanes, 1)
@@ -169,7 +170,8 @@ class HourglassNet(nn.Module):
         x = self.layer1(x)  
         x = self.maxpool(x)
         x = self.layer2(x)  
-        x = self.layer3(x)  
+        x = self.layer3(x)
+        x = self.maxpool(x)
 
         for i in range(self.num_stacks):
             y = self.hg[i](x)
